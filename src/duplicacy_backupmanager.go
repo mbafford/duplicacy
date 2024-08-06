@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-    "github.com/vmihailenco/msgpack"
+	"github.com/vmihailenco/msgpack"
 )
 
 // BackupManager performs the two major operations, backup and restore, and passes other operations, mostly related to
@@ -32,7 +32,7 @@ type BackupManager struct {
 	storage    Storage // the storage for storing backups
 
 	SnapshotManager *SnapshotManager // the snapshot manager
-	snapshotCache   *FileStorage     // for copies of chunks needed by snapshots
+	SnapshotCache   *FileStorage     // for copies of chunks needed by snapshots
 
 	config *Config // contains a number of options
 
@@ -119,7 +119,7 @@ func (manager *BackupManager) SetupSnapshotCache(storageName string) bool {
 	manager.cachePath = path.Join(preferencePath, "cache", storageName)
 
 	storage.SetDefaultNestingLevels([]int{1}, 1)
-	manager.snapshotCache = storage
+	manager.SnapshotCache = storage
 	manager.SnapshotManager.snapshotCache = storage
 	return true
 }
@@ -229,7 +229,7 @@ func (manager *BackupManager) Backup(top string, quickMode bool, threads int, ta
 
 	localListingChannel := make(chan *Entry)
 	remoteListingChannel := make(chan *Entry)
-	chunkOperator := CreateChunkOperator(manager.config, manager.storage, manager.snapshotCache, showStatistics, false, threads, false)
+	chunkOperator := CreateChunkOperator(manager.config, manager.storage, manager.SnapshotCache, showStatistics, false, threads, false)
 
 	var skippedDirectories []string
 	var skippedFiles []string
@@ -679,7 +679,7 @@ func (manager *BackupManager) Restore(top string, revision int, inPlace bool, qu
 
 	localListingChannel := make(chan *Entry)
 	remoteListingChannel := make(chan *Entry)
-	chunkOperator := CreateChunkOperator(manager.config, manager.storage, manager.snapshotCache, showStatistics, false, threads, allowFailures)
+	chunkOperator := CreateChunkOperator(manager.config, manager.storage, manager.SnapshotCache, showStatistics, false, threads, allowFailures)
 
 	LOG_INFO("RESTORE_INDEXING", "Indexing %s", top)
 	go func() {
@@ -1133,6 +1133,7 @@ func (manager *BackupManager) UploadSnapshot(chunkOperator *ChunkOperator, top s
 		return int64(0), 0, int64(0), int64(0)
 	}
 
+	// BOOKMARK: Upload the actual snapshot file
 	path := fmt.Sprintf("snapshots/%s/%d", manager.snapshotID, snapshot.Revision)
 	if !manager.config.dryRun {
 		manager.SnapshotManager.UploadFile(path, path, description)

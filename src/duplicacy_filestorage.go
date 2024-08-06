@@ -25,6 +25,10 @@ type FileStorage struct {
 	numberOfThreads int
 }
 
+func (storage *FileStorage) GetStorageDir() string {
+	return storage.storageDir;
+}
+
 // CreateFileStorage creates a file storage.
 func CreateFileStorage(storageDir string, isCacheNeeded bool, threads int) (storage *FileStorage, err error) {
 

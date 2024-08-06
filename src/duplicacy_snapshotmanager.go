@@ -18,10 +18,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
-	"time"
 	"sync"
 	"sync/atomic"
+	"text/tabwriter"
+	"time"
 
 	"github.com/aryann/difflib"
 )
@@ -354,6 +354,8 @@ func (manager *SnapshotManager) ClearSnapshotSequences(snapshot *Snapshot) {
 	snapshot.ChunkLengths = nil
 }
 
+// BOOKMARK: This does basically what I want for reading from the local cache and getting the JSON prepared
+// for uploading encrypted to the storage
 // CleanSnapshotCache removes all files not referenced by the specified 'snapshot' in the snapshot cache.
 func (manager *SnapshotManager) CleanSnapshotCache(latestSnapshot *Snapshot, allSnapshots map[string][]*Snapshot) bool {
 
@@ -473,7 +475,7 @@ func (manager *SnapshotManager) ListSnapshotIDs() (snapshotIDs []string, err err
 	dirs, _, err := manager.storage.ListFiles(0, "snapshots/")
 	if err != nil {
 		return nil, err
-	}
+}
 
 	for _, dir := range dirs {
 		if len(dir) > 0 && dir[len(dir)-1] == '/' {

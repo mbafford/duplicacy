@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -24,7 +26,7 @@ import (
 
 	"io/ioutil"
 
-	"github.com/gilbertchen/duplicacy/src"
+	duplicacy "github.com/gilbertchen/duplicacy/src"
 )
 
 const (
@@ -896,6 +898,91 @@ func restoreRepository(context *cli.Context) {
 	runScript(context, preference.Name, "post")
 }
 
+func reuploadSnapshotFiles(context *cli.Context) {
+	setGlobalOptions(context)
+	defer duplicacy.CatchLogException()
+
+	if len(context.Args()) != 0 {
+		fmt.Fprintf(context.App.Writer, "The %s command requires no arguments.\n\n", context.Command.Name)
+		cli.ShowCommandHelp(context, context.Command.Name)
+		os.Exit(ArgumentExitCode)
+	}
+
+	repository, preference := getRepositoryPreference(context, "")
+
+	duplicacy.LOG_INFO("STORAGE_SET", "Storage set to %s", preference.StorageURL)
+
+	runScript(context, preference.Name, "pre")
+
+	if ! preference.Encrypted {
+		log.Printf("This storage isn't encrypted. It doesn't make any sense to try to re-encrypt the snapshot files.")
+		return
+	}
+
+	storage := duplicacy.CreateStorage(*preference, false /*resetPassword*/, 1)
+	password := duplicacy.GetPassword(*preference, "password", "Enter storage password:", false, false /*resetPassword*/)
+
+	config, _, err := duplicacy.DownloadConfig(storage, password)
+	if err != nil {
+		duplicacy.LOG_ERROR("STORAGE_CONFIG", "Failed to download the configuration file from the storage: %v", err)
+		return
+	}
+
+	if config == nil {
+		duplicacy.LOG_ERROR("STORAGE_NOT_CONFIGURED", "The storage has not been initialized")
+		return
+	}
+
+	backupManager := duplicacy.CreateBackupManager(preference.SnapshotID, storage, repository, password, "", "", preference.ExcludeByAttribute)
+	duplicacy.SavePassword(*preference, "password", password)
+
+	// need the password / private key for encrypting the snapshots as we upload them
+	loadRSAPrivateKey(context.String("key"), "", preference, backupManager, false)
+
+	backupManager.SetupSnapshotCache(preference.Name)
+
+	duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Querying remote storage for existing revisions for snapshot %s", preference.SnapshotID);
+	storageSnapshots, _ := backupManager.SnapshotManager.ListSnapshotRevisions(preference.SnapshotID)
+	duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Found %d revisions on remote storage for snapshot %s", len(storageSnapshots), preference.SnapshotID)
+
+
+	cachePath := fmt.Sprintf("snapshots/%s/", preference.SnapshotID)
+	
+	cacheFiles, _, _ := backupManager.SnapshotCache.ListFiles(0, cachePath)
+	duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Found %d revision files in local cache for snapshot %s", len(cacheFiles), preference.SnapshotID)
+
+	for _, cachedFile := range cacheFiles {
+		cachedRevision, _ := strconv.ParseInt(cachedFile, 10, 8)
+		exists := slices.Contains(storageSnapshots, int(cachedRevision))
+
+		if exists {
+			duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Skipping re-upload of snapshot %s revision %d which already exists in remote storage", preference.SnapshotID, cachedRevision)
+			continue
+		}
+
+		duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Found snapshot %s revision %d in cache: %s, but not in storage", preference.SnapshotID, cachedRevision, cachedFile);
+
+		snapshotPath := path.Join(backupManager.SnapshotCache.GetStorageDir(), cachePath, cachedFile)
+		snapshotJSON, err := os.ReadFile(snapshotPath)	
+		if err != nil {
+			duplicacy.LOG_WARN("SNAPSHOT_CACHE", "Failed to read the cached snapshot file: %v", err)
+			return
+		}
+
+		// there's no actual use of parsing the Snapshot from the Snapshot JSON
+		// can just upload the JSON without that step, but this might be useful if you want to 
+		// get information out of the Snapshot or verify the snapshot chunks
+		// snapshot, _ := duplicacy.CreateSnapshotFromDescription(snapshotJSON);
+		// duplicacy.LOG_INFO("REUPLOAD_SNAPSHOT", "Uploading snapshot revision %d", snapshot.Revision)
+
+		duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Uploading the encrypted version to %s", snapshotPath)
+		uploaded := backupManager.SnapshotManager.UploadFile(snapshotPath, snapshotPath, snapshotJSON)
+		duplicacy.LOG_INFO("REUPLOAD_SNAPSHOTS", "Uploaded? %t", uploaded);
+	}
+
+	runScript(context, preference.Name, "post")
+}
+
 func listSnapshots(context *cli.Context) {
 	setGlobalOptions(context)
 	defer duplicacy.CatchLogException()
@@ -1635,6 +1722,20 @@ func main() {
 			Usage:     "Restore the repository to a previously saved snapshot",
 			ArgsUsage: "[--] [pattern] ...",
 			Action:    restoreRepository,
+		},
+
+		{
+			Name: "reupload-snapshot-file",
+			Usage:     "Encrypts and re-uploads the local cached snapshot files to the storage, encrypting them in the process.",
+			ArgsUsage: " ",
+			Action:    reuploadSnapshotFiles,
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "storage",
+					Usage:    "The storage name to upload the locally cached snapshots to",
+					Argument: "<storage name>",
+				},
+			},
 		},
 
 		{
